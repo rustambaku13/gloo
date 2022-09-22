@@ -103,6 +103,15 @@ void Pair::connect(const std::vector<char>& bytes) {
   connect(peer);
 }
 
+static u_short* parsePortRanges(char * range){
+    // range string ex: 8000:8010
+    auto range_string = std::string(range);
+    auto min_port =  range_string.substr(0, range_string.find(':'));
+    auto max_port =  range_string.substr(range_string.find(':') + 1, range_string.length());
+
+    return new u_short[2]{(u_short) std::stoi(min_port), (u_short) std::stoi(max_port)};
+}
+
 static void setSocketBlocking(int fd, bool enable) {
   auto rv = fcntl(fd, F_GETFL);
   GLOO_ENFORCE_NE(rv, -1);
@@ -170,11 +179,30 @@ void Pair::listen() {
     signalAndThrowException(GLOO_ERROR_MSG("setsockopt: ", strerror(errno)));
   }
 
-  rv = bind(fd, (const sockaddr*)&attr.ai_addr, attr.ai_addrlen);
-  if (rv == -1) {
-    ::close(fd);
-    signalAndThrowException(GLOO_ERROR_MSG("bind: ", strerror(errno)));
-  }
+    // My code for custom port assignment, only for IpV4
+    // Trying all the ports in the range of ports and find one to bind to
+    sockaddr* val = (sockaddr*)&attr.ai_addr;
+    if(val->sa_family == AF_INET && getenv("GLOO_PORT_RANGE")){
+        sockaddr_in * val_ip4 = (sockaddr_in *) &attr.ai_addr;
+        u_short* port_range = parsePortRanges(getenv("GLOO_PORT_RANGE"));
+        for (u_short i = port_range[0];i++; i <= port_range[1]) {
+            val_ip4->sin_port = htons(i);
+            rv = bind(fd, val, attr.ai_addrlen);
+            if(rv != -1) break;
+        }
+        if (rv == -1) {
+            ::close(fd);
+            signalAndThrowException(GLOO_ERROR_MSG("bind: ", strerror(errno)));
+        }
+
+    }else{
+        rv = bind(fd, val, attr.ai_addrlen);
+        if (rv == -1) {
+            ::close(fd);
+            signalAndThrowException(GLOO_ERROR_MSG("bind: ", strerror(errno)));
+        }
+    }
+  // END of my code block
 
   // listen(2) on socket
   fd_ = fd;
